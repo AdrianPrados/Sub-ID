@@ -1,0 +1,120 @@
+{
+    "metadata": {
+        ".zgroup": {
+            "zarr_format": 2
+        },
+        "data/.zgroup": {
+            "zarr_format": 2
+        },
+        "data/T_world_mocap/.zarray": {
+            "chunks": [
+                4096,
+                7
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dimension_separator": ".",
+            "dtype": "<f4",
+            "fill_value": 0.0,
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29,
+                7
+            ],
+            "zarr_format": 2
+        },
+        "data/T_world_mocap_time/.zarray": {
+            "chunks": [
+                4096
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dimension_separator": ".",
+            "dtype": "<f8",
+            "fill_value": 0.0,
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29
+            ],
+            "zarr_format": 2
+        },
+        "data/episode_ends/.zarray": {
+            "chunks": [
+                1024
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dimension_separator": ".",
+            "dtype": "<i8",
+            "fill_value": 0,
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29
+            ],
+            "zarr_format": 2
+        },
+        "data/state/.zarray": {
+            "chunks": [
+                70,
+                7
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dimension_separator": ".",
+            "dtype": "<f4",
+            "fill_value": 0.0,
+            "filters": null,
+            "order": "C",
+            "shape": [
+                51856,
+                7
+            ],
+            "zarr_format": 2
+        },
+        "data/time/.zarray": {
+            "chunks": [
+                4096
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dimension_separator": ".",
+            "dtype": "<f8",
+            "fill_value": 0.0,
+            "filters": null,
+            "order": "C",
+            "shape": [
+                51856
+            ],
+            "zarr_format": 2
+        }
+    },
+    "zarr_consolidated_format": 1
+}
