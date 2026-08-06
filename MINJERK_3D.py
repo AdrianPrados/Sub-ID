@@ -11,18 +11,14 @@ from scipy.interpolate import interp1d
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import time
 
-# --- CONFIGURACIÓN ---
-if not os.path.exists('Plots_AdrianData_MinJerk_3D'):
-    os.makedirs('Plots_AdrianData_MinJerk_3D')
+if not os.path.exists('Plots/Plots_MinJerk_3D'):
+    os.makedirs('Plots/Plots_MinJerk_3D')
 
 np.set_printoptions(precision=4, suppress=True)
 
 # REGULARIZATION FACTOR (L2 / RIDGE)
 RIDGE_ALPHA = 0.1  
 
-# -----------------------------------------------------------------------------
-# 1. FUNCIONES DE CARGA DE DATOS 
-# -----------------------------------------------------------------------------
 
 def import_data(zarr_root_str: str):
     zarr_root = Path(zarr_root_str)
@@ -56,45 +52,37 @@ def import_data(zarr_root_str: str):
         dex_end = episode_ends_raw[trial] 
         dex_states = np.arange(dex_start, dex_end)
 
-        # --- SOLUCIÓN VECTORIZADA: MONOTONÍA ABSOLUTA ---
+        
         t_episode = times_raw[dex_states].copy()
         
-        # 1. Normalizar a cero temporalmente. Esto nos salva si los tiempos son Unix Epoch.
+        
         t_zero = t_episode[0]
         t_episode = t_episode - t_zero
         
-        # 2. Impedir que el tiempo retroceda (corrige el ruido del sensor y el desorden).
-        # Esto convierte algo como [0.1, 0.05, 0.2] en [0.1, 0.1, 0.2]
+        
         t_episode = np.maximum.accumulate(t_episode)
         
-        # 3. Forzar el crecimiento estricto añadiendo una pendiente microscópica total de 1 milisegundo.
-        # Esto convierte los duplicados [0.1, 0.1, 0.2] en [0.100, 0.105, 0.201]
-        # Garantiza cero duplicados de forma rapidísima.
+        
         t_episode = t_episode + np.linspace(0, 1e-3, len(t_episode))
         
-        # 4. Restaurar el tiempo base original.
+        
         t_episode = t_episode + t_zero
-        # ------------------------------------------------
 
-        # 2. Crear target_times
         t_start_ep = t_episode[0]
         t_end_ep = t_episode[-1]
         target_times = np.arange(t_start_ep + dt, t_end_ep - dt, dt)
         
         states = np.zeros((len(target_times), 7))
 
-        # 1. INTERPOLACIÓN POSICIÓN
+        
         for i in range(3):
-            # interp1d ya no se quejará de duplicados ni desórdenes
             f_interp = interp1d(t_episode, states_raw[dex_states, i], kind="cubic", assume_sorted=True)
             states[:, i] = f_interp(target_times)
 
-        # 2. INTERPOLACIÓN ROTACIÓN
         rot_in = Rotation.from_quat(states_raw[dex_states, 3:7])
         slerp = Slerp(t_episode, rot_in)
         states[:, 3:7] = slerp(target_times).as_quat()
 
-        # 3. FILTRADO
         b, a = butter(butter_order, lowpass_cutoff / (target_hz / 2), btype="low", analog=False)
         states[:, 0] = filtfilt(b, a, states[:, 0], axis=0)
         states[:, 1] = filtfilt(b, a, states[:, 1], axis=0)
@@ -112,80 +100,9 @@ def import_data(zarr_root_str: str):
     return (states_raw, times_raw, episode_ends_raw, 
             states_processed_all, target_times_all, episode_ends_processed)
 
-""" def import_data(zarr_root_str: str):
-    zarr_root = Path(zarr_root_str)
-    print(f"Loading Zarr: {zarr_root}")
-    zarr_data = zarr.open(str(zarr_root), mode="r")
-    
-    target_hz = 100.0
-    lowpass_cutoff = 1.0 
-    butter_order = 4
-    
-    print(f"  > Processing params: Target Hz={target_hz}, Cutoff={lowpass_cutoff}Hz")
-
-    episode_ends_raw = zarr_data["data/episode_ends"][:]  
-    states_raw = zarr_data["data/state"][:]  
-    times_raw = zarr_data["data/time"][:]  
-    
-    times_raw = np.asarray(times_raw).ravel()
-    dt = 1.0 / float(target_hz)
-
-    target_times_list = []
-    states_list = []
-    episode_ends_list = []
-    n_list = 0
-
-    for trial in range(episode_ends_raw.shape[0]):
-        if trial == 0: dex_start = 0
-        else: dex_start = episode_ends_raw[trial - 1]
-        dex_end = episode_ends_raw[trial] - 1
-        dex_states = np.arange(dex_start, dex_end)
-
-        # --- FILTRO DE DUPLICADOS ---
-        # Extraer tiempos, encontrar los únicos y mantener solo esos índices
-        #t_episode = times_raw[dex_states_raw]
-        #_, unique_idx = np.unique(t_episode, return_index=True)
-        #dex_states = dex_states_raw[unique_idx]
-        # ----------------------------
-
-        # 2. Crear target_times usando los límites de tiempo limpios
-        t_start_ep = times_raw[dex_states[0]]
-        t_end_ep = times_raw[dex_states[-1]]
-        target_times = np.arange(t_start_ep + dt, t_end_ep - dt, dt)
-        
-        states = np.zeros((len(target_times), 7))
-
-
-        # 1. INTERPOLACIÓN POSICIÓN
-        for i in range(3):
-            f_interp = interp1d(times_raw[dex_states], states_raw[dex_states, i], kind="cubic")
-            states[:, i] = f_interp(target_times)
-
-        # 2. INTERPOLACIÓN ROTACIÓN
-        rot_in = Rotation.from_quat(states_raw[dex_states, 3:7])
-        slerp = Slerp(times_raw[dex_states], rot_in)
-        states[:, 3:7] = slerp(target_times).as_quat()
-
-        # 3. FILTRADO
-        b, a = butter(butter_order, lowpass_cutoff / (target_hz / 2), btype="low", analog=False)
-        states[:, 0] = filtfilt(b, a, states[:, 0], axis=0)
-        states[:, 1] = filtfilt(b, a, states[:, 1], axis=0)
-        states[:, 2] = filtfilt(b, a, states[:, 2], axis=0)
-
-        target_times_list.append(target_times)
-        states_list.append(states)
-        episode_ends_list.append(n_list + len(target_times))
-        n_list += len(target_times)
-
-    target_times_all = np.concatenate(target_times_list, axis=0)
-    states_processed_all = np.concatenate(states_list, axis=0)
-    episode_ends_processed = np.array(episode_ends_list)
-
-    return (states_raw, times_raw, episode_ends_raw, 
-            states_processed_all, target_times_all, episode_ends_processed) """
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR MATEMÁTICO: MINIMUM JERK
+# MINIMUM JERK
 # -----------------------------------------------------------------------------
 
 def compute_minjerk_base(t, t0, t1):
@@ -213,7 +130,7 @@ def compute_minjerk_base(t, t0, t1):
 
 def build_phi_matrix(t, t_starts, t_ends):
     """
-    Construye la matriz Phi para MinJerks.
+    Build matrix Phi for MinJerks.
     """
     K = t_starts.size
     N = t.size
@@ -234,8 +151,6 @@ def solve_ridge_weighted(A, b, alpha=0.1):
 
     N_features = A.shape[1]
     
-    # Matriz de Regularización (Identidad escalada por alpha)
-    # La última columna es el Intercepto, NO queremos regularizarla.
     Lambda = np.eye(N_features) * alpha
     Lambda[-1, -1] = 0.0 
     
@@ -249,13 +164,10 @@ def solve_ridge_weighted(A, b, alpha=0.1):
         
     return x
 
-# -----------------------------------------------------------------------------
-# 3. ALGORITMOS DE AJUSTE (ADAPTADOS A MINJERK 3D)
-# -----------------------------------------------------------------------------
 
 def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=0.03, verbose=False):
     """
-    Versión adaptada del greedy de LGNB pero usando MinJerk (sin bucle de Mu).
+    greedy de LGNB using MinJerk
     """
     if isinstance(frefs, list): F = np.column_stack(frefs)
     else: F = np.asarray(frefs)
@@ -269,7 +181,6 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
     
     starts_found, ends_found = [], []
     
-    # --- FASE A: Detección Inicial ---
     if verbose: print("  [MinJerk] Fase A: Detecting main peaks...")
     dist_param = max(1, N // 60) 
     peaks_indices, _ = find_peaks(vt, height=max_vt * 0.05, distance=dist_param)
@@ -282,12 +193,10 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
             center_time = (t_left + t_right) / 2.0
             width_fwhm = t_right - t_left
             
-            # MinJerk suele ser más ancho que la FWHM gaussiana pura
             duration = np.clip(width_fwhm * 1.8, 0.2, 3.5)
             starts_found.append(center_time - (duration / 2.0))
             ends_found.append(center_time + (duration / 2.0))
 
-    # Residuo inicial
     if len(starts_found) > 0:
         Phi = build_phi_matrix(t, np.array(starts_found), np.array(ends_found))
         s, _ = nnls(Phi, vt)
@@ -297,15 +206,11 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
 
     rms = np.sqrt(np.mean(residual**2))
     
-    #Added for the plot on the paper:
-    """ Phi_init = build_phi_matrix(t, ts_init, te_init)
-    s_init, _ = nnls(Phi_init, vt_ref) """
     vt_fit_init = Phi.dot(s)
     
     plot_velocity_and_bases(t, vt, vt_fit_init, np.array(starts_found), np.array(ends_found), s, 
                             dim_color='tab:cyan', title='STEP 0b:')
     
-    # --- FASE B: Grid Search ---
     candidate_durations = np.arange(0.2, 3.5, 0.02)
     
     if rms > max_vt * residual_tol:
@@ -316,7 +221,6 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
             if residual[idx_max] < max_vt * residual_tol: break
             t_res_peak = t[idx_max]
 
-            # Check proximidad a existentes
             if len(starts_found) > 0:
                 centers = (np.array(starts_found) + np.array(ends_found)) / 2.0
                 if np.min(np.abs(centers - t_res_peak)) < 0.05:
@@ -360,8 +264,6 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
             
             vt_new = Phi_new.dot(s_new)
             
-            # --- MODIFICACIÓN VISUAL: Asignamos colores ---
-            # Todas las bases existentes (len-1) serán azules, la última añadida será roja
             iter_colors = ['tab:blue'] * (len(starts_found) - 1) + ['tab:red']
             
             plot_velocity_and_bases_paper(t, vt, vt_new, np.array(starts_found), np.array(ends_found), s_new, 
@@ -371,7 +273,7 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
 
 def compute_position_error_minjerk_3d(params, t, P_ref):
     """
-    Función de coste 3D usando Ridge Regression.
+    Cost function 3D using Ridge Regression.
     """
     N, D = P_ref.shape # D=3 (X,Y,Z)
     K = params.size // 2
@@ -380,22 +282,17 @@ def compute_position_error_minjerk_3d(params, t, P_ref):
     
     MAX_DURATION = 5.0 
     
-    # Penalizaciones temporales
     if np.any(t_starts >= t_ends - 0.02): return 1e12
     if np.any((t_ends - t_starts) > MAX_DURATION): return 1e12
 
-    # Construcción base
     Phi_vel = build_phi_matrix(t, t_starts, t_ends)
     
-    # Integración para posición
     Phi_pos = np.zeros_like(Phi_vel)
     for k in range(K):
         Phi_pos[:, k] = cumtrapz(Phi_vel[:, k], t, initial=0.0)
         
-    # Añadir columna de unos para el offset inicial (Intercept)
     A = np.hstack([Phi_pos, np.ones((N, 1))])
     
-    # --- RIDGE REGRESSION IMPLEMENTATION (Sum of errors per dimension) ---
     total_error = 0
     for d in range(D):
         w = solve_ridge_weighted(A, P_ref[:, d], alpha=RIDGE_ALPHA)
@@ -430,9 +327,7 @@ def refine_bases_minjerk(t, P_ref, t_starts_init, t_ends_init, verbose=False, st
     return ts[idx], te[idx]
 
 def merge_bases_minjerk_3d(t_starts, t_ends, scales, proximity_tol=0.05):
-    """
-    Mezcla bases cercanas. scales tiene shape (K, D).
-    """
+
     K, D = scales.shape
     if K < 2: return t_starts, t_ends, scales
     
@@ -456,7 +351,6 @@ def merge_bases_minjerk_3d(t_starts, t_ends, scales, proximity_tol=0.05):
                     visited[j] = True
                     
         idx_g = np.array(group)
-        # Magnitud vectorial para ponderar
         mags = np.linalg.norm(scales[idx_g], axis=1)
         total_mag = np.sum(mags) + 1e-9
         
@@ -470,9 +364,6 @@ def merge_bases_minjerk_3d(t_starts, t_ends, scales, proximity_tol=0.05):
         
     return np.array(new_ts), np.array(new_te), np.array(new_scales)
 
-# -----------------------------------------------------------------------------
-# 4. PLOTTING HELPERS (MISMOS QUE LGNB, RENOMBRADOS)
-# -----------------------------------------------------------------------------
 def plot_velocity_and_bases_paper(t, v_ref, v_fit, t_starts, t_ends, scales_dim, 
                             gt_starts=None, gt_ends=None, gt_scales=None,
                             dim_color='tab:red', title='Velocity dimension'):
@@ -484,7 +375,6 @@ def plot_velocity_and_bases_paper(t, v_ref, v_fit, t_starts, t_ends, scales_dim,
     plt.plot(t, v_ref, 'k-', lw=2.5, label='Original')
     plt.plot(t, v_fit, '--', lw=2, color='green', label='Reconstructed')
 
-    # --- MODIFICACIÓN: Soporte para múltiples colores ---
     if isinstance(dim_color, str):
         colors = [dim_color] * scaled.shape[1]
     else:
@@ -497,7 +387,6 @@ def plot_velocity_and_bases_paper(t, v_ref, v_fit, t_starts, t_ends, scales_dim,
         c = colors[k]
         label_str = None
         
-        # Asignar leyenda dinámicamente según si usamos 1 color o 2 colores
         if isinstance(dim_color, str):
             if not has_old_label:
                 label_str = 'MinJerk Bases'
@@ -518,11 +407,10 @@ def plot_velocity_and_bases_paper(t, v_ref, v_fit, t_starts, t_ends, scales_dim,
     plt.xlabel('Time (t)'); plt.ylabel('Velocity'); plt.title(title)
     plt.grid(True, linestyle=':', alpha=0.6); plt.tight_layout()
     
-    # Me aseguro de que el directorio existe por si acaso
-    if not os.path.exists("Plots_AdrianData_MinJerk_3D"):
-        os.makedirs("Plots_AdrianData_MinJerk_3D")
+    if not os.path.exists("Plots/Plots_MinJerk_3D"):
+        os.makedirs("Plots/Plots_MinJerk_3D")
         
-    plt.savefig(os.path.join("Plots_AdrianData_MinJerk_3D", title.replace("\n", "").replace(":", "").replace(" ", "_") + ".svg"))
+    plt.savefig(os.path.join("Plots/Plots_MinJerk_3D", title.replace("\n", "").replace(":", "").replace(" ", "_") + ".svg"))
     plt.close()
 
 
@@ -546,7 +434,7 @@ def plot_velocity_and_bases(t, v_ref, v_fit, t_starts, t_ends, scales_dim,
     plt.legend(loc='upper right', ncol=3, fontsize='small')
     plt.xlabel('Time (t)'); plt.ylabel('Velocity'); plt.title(title)
     plt.grid(True, linestyle=':', alpha=0.6); plt.tight_layout()
-    plt.savefig(os.path.join("Plots_AdrianData_MinJerk_3D", title.replace("\n", "").replace(":", "").replace(" ", "_") + ".svg"))
+    plt.savefig(os.path.join("Plots/Plots_MinJerk_3D", title.replace("\n", "").replace(":", "").replace(" ", "_") + ".svg"))
     plt.close()
 
 def plot_velocity_and_bases_signed(t, v_ref, v_fit, t_starts, t_ends, Phi_vel, scales_dim, 
@@ -575,7 +463,7 @@ def plot_velocity_and_bases_signed(t, v_ref, v_fit, t_starts, t_ends, Phi_vel, s
     plt.xlabel('Time (s)'); plt.ylabel('Velocity (m/s)'); plt.title(title)
     plt.legend(loc='upper right', fontsize='small'); plt.grid(True, linestyle=':', alpha=0.6)
     plt.tight_layout()
-    plt.savefig(os.path.join("Plots_AdrianData_MinJerk_3D", title.replace(" ", "_") + ".svg"))
+    plt.savefig(os.path.join("Plots/Plots_MinJerk_3D", title.replace(" ", "_") + ".svg"))
     plt.close()
 
 def plot_position_and_integrated_bases(t, p_ref, p_fit, t_starts, t_ends, Phi_pos, scales_dim, 
@@ -595,7 +483,7 @@ def plot_position_and_integrated_bases(t, p_ref, p_fit, t_starts, t_ends, Phi_po
 
     plt.xlabel('Time (t)'); plt.ylabel('Position'); plt.title(title)
     plt.legend(); plt.grid(True, linestyle=':', alpha=0.6); plt.tight_layout()
-    plt.savefig(os.path.join("Plots_AdrianData_MinJerk_3D", title.replace(" ", "_") + ".svg"))
+    plt.savefig(os.path.join("Plots/Plots_MinJerk_3D", title.replace(" ", "_") + ".svg"))
     plt.close()
 
 def plot_3d_trajectory_pos(P_ref, P_fit):
@@ -607,65 +495,36 @@ def plot_3d_trajectory_pos(P_ref, P_fit):
     ax.set_title('3D Trajectory: Real vs Fitted (MinJerk)')
     ax.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join("Plots_AdrianData_MinJerk_3D", "3D_Trajectory.svg"))
+    plt.savefig(os.path.join("Plots/Plots_MinJerk_3D", "3D_Trajectory.svg"))
     #plt.close()
     plt.show()
 
-# -----------------------------------------------------------------------------
-# 5. MAIN
-# -----------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    # 1. LOAD DATA (ADRIAN DATASET)
-    #zarr_path = "/home/adrian/Escritorio/ImitationLearning/LfDSynergies/MutualSynergies/subirGit/data/adrian_data/spatula_pose_raw.zarr"
-    zarr_path = "/home/adrian/Escritorio/ImitationLearning/LfDSynergies/MutualSynergies/subirGit/data/adrian_data/pushing_2026-02-20-16-16/spatula_pose_raw.zarr"
-    #zarr_path = "/home/adrian/Escritorio/ImitationLearning/LfDSynergies/MutualSynergies/subirGit/data/adrian_data/small_scoop_2026-01-28-17-27/small_scoop_2026-01-28-17-27/spatula_pose_raw.zarr"
-    # Usamos la funcion import_data importada del estilo LGNB
+    #zarr_path = "data/adrian_data/spatula_pose_raw.zarr"
+    zarr_path = "data/adrian_data/pushing_2026-02-20-16-16/spatula_pose_raw.zarr"
+    #zarr_path = "data/adrian_data/small_scoop_2026-01-28-17-27/small_scoop_2026-01-28-17-27/spatula_pose_raw.zarr"
     (states_raw, times_raw, episode_ends_raw, 
     states_proc, times_proc, episode_ends_proc) = import_data(zarr_path)
     
     EPISODE_IDX = 1
     print(f"\nMinJerk Analysis - Episode {EPISODE_IDX} (Ridge: {RIDGE_ALPHA})...")
 
-    # --- DATOS PROCESADOS (FILTRADOS) ---
     start_proc = 0 if EPISODE_IDX == 0 else episode_ends_proc[EPISODE_IDX-1]
     end_proc = episode_ends_proc[EPISODE_IDX]
     t_proc_ep = times_proc[start_proc:end_proc]
     p_proc_ep = states_proc[start_proc:end_proc, :3] # XYZ
     
     t = t_proc_ep - t_proc_ep[0]
-    #t= t[85:320] # Corto para acelerar pruebas
-    #P = p_proc_ep[85:320, :3] # XYZ (corto para acelerar pruebas)
     P=p_proc_ep
     
-    
-    
-    # Derivar velocidad del P procesado para la inicialización
     V_ref_3d = np.zeros_like(P)
     for i in range(3):
         V_ref_3d[:, i] = np.gradient(P[:, i], t)
     vt_ref = np.linalg.norm(V_ref_3d, axis=1)
     
-    """ # --- 2. Matar el rebote final de la velocidad ---
-    # Sabemos que los últimos 19 valores son los que vuelven a subir.
-    puntos_rebote = 50 
-
-    # Creamos una curva de atenuación que va de 1.0 bajando suavemente a 0.0
-    curva_frenado = np.cos(np.linspace(0, np.pi/2, puntos_rebote))
-
-    # Multiplicamos la velocidad 3D de esos últimos puntos por la curva
-    for i in range(3):
-        V_ref_3d[-puntos_rebote:, i] = V_ref_3d[-puntos_rebote:, i] * curva_frenado
-
-    # --- 3. Calcular la velocidad tangencial final ---
-    # Al recalcularla ahora, los valores irán bajando desde ~0.0242 hasta 0.0
-    vt_ref = np.linalg.norm(V_ref_3d, axis=1)
     
-    print(vt_ref) """
-    
-    # --- PIPELINE ---
-    
-    # 1. INITIAL GUESS (GREEDY MINJERK)
+    #INITIAL GUESS (GREEDY MINJERK)
     print("STEP 1: Getting initial guess (MinJerk Greedy)...")
     t_init_contador = time.time()
     ts_init, te_init = fit_hybrid_peaks_greedy_minjerk(t, [vt_ref], verbose=True, residual_tol=0.0)
@@ -678,19 +537,16 @@ if __name__ == '__main__':
     plot_velocity_and_bases(t, vt_ref, vt_fit_init, ts_init, te_init, s_init, 
                             dim_color='tab:cyan', title='STEP 1b: Initial Guess (Fitted to vt_ref)')
     
-    # 2. GLOBAL OPTIMIZATION (3D)
-    # Refina tiempos (ts, te) minimizando error en XYZ
+    # GLOBAL OPTIMIZATION (3D)
     ts_opt, te_opt = refine_bases_minjerk(t, P, ts_init, te_init, verbose=False)
     
-    # 3. MERGING & CLEANUP
-    # Calcular escalas intermedias 3D para hacer el merge
+    # MERGING & CLEANUP
     Phi_vel = build_phi_matrix(t, ts_opt, te_opt)
     Phi_pos = np.zeros_like(Phi_vel)
     for k in range(Phi_pos.shape[1]): Phi_pos[:, k] = cumtrapz(Phi_vel[:, k], t, initial=0.0)
     
     A_temp = np.hstack([Phi_pos, np.ones((len(t), 1))])
     
-    # Resolver Ridge temporalmente para cada dimensión
     scales_list_temp = []
     for d in range(3):
         w = solve_ridge_weighted(A_temp, P[:, d], alpha=RIDGE_ALPHA)
@@ -700,12 +556,10 @@ if __name__ == '__main__':
     print(f"\nSTEP 3: Merging & Re-Optimization...")
     ts_final, te_final, scales_final = merge_bases_minjerk_3d(ts_opt, te_opt, curr_scales, proximity_tol=0.04)
     
-    # Refinamiento Final
     ts_final, te_final = refine_bases_minjerk(t, P, ts_final, te_final, verbose=False, step_title="Final Refine")
     
     K_final = ts_final.size
     
-    # 4. CALCULO FINAL DE ESCALAS (3D RIDGE)
     Phi_vel_final = build_phi_matrix(t, ts_final, te_final)
     Phi_pos_final = np.zeros_like(Phi_vel_final)
     for k in range(K_final):
@@ -716,7 +570,6 @@ if __name__ == '__main__':
     scales_list_final = []
     p0_list = []
     
-    # Loop por dimensiones X, Y, Z
     for d in range(3):
         w = solve_ridge_weighted(A_final, P[:, d], alpha=RIDGE_ALPHA)
         scales_list_final.append(w[:-1])
@@ -724,7 +577,6 @@ if __name__ == '__main__':
         
     scales_final = np.column_stack(scales_list_final)
     
-    # Reconstrucción
     P_fit = np.zeros_like(P)
     for d in range(3):
         w_full = np.concatenate([scales_list_final[d], [p0_list[d]]])
@@ -737,7 +589,6 @@ if __name__ == '__main__':
     t_end_contador = time.time()
     print("Total Time: {:.2f}s".format(t_end_contador - t_init_contador))
     
-    # --- PLOTS ---
     print("\nGenerating Plots (MinJerk 3D)...")
     rmse = np.sqrt(np.mean(np.sum((P - P_fit)**2, axis=1)))
     print(f"RMSE 3D: {rmse:.5f}")
@@ -761,7 +612,7 @@ if __name__ == '__main__':
     plot_velocity_and_bases(t, vt_ref, vt_fit, ts_final, te_final, scales_mag, 
                             dim_color='tab:orange', title='Final Tangential Velocity (MinJerk)')
     
-    print(f"\nAll plots saved in 'Plots_AdrianData_MinJerk_3D'")
+    print(f"\nAll plots saved in 'Plots/Plots_MinJerk_3D'")
 
     print("\nFinal Parameters (MinJerk 3D):")
     print(f"{'ID':<3} | {'Start':<8} | {'End':<8} | {'Dur':<8} | {'Sx':<8} | {'Sy':<8} | {'Sz':<8}")
