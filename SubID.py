@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import time
@@ -19,6 +20,15 @@ if not os.path.exists('Plots/Plots_AutomaticRidge_MultiDataset'):
     os.makedirs('Plots/Plots_AutomaticRidge_MultiDataset')
 
 np.set_printoptions(precision=4, suppress=True)
+
+# Global variables for Ridge Alpha strategy
+USE_DYNAMIC_ALPHA = True
+GLOBAL_ALPHA = 0.0
+
+# Global variables for LGNB strategy
+OPTIMIZE_MU = True 
+MIN_MU_LIMIT = -4.0
+MAX_MU_LIMIT = 4.0
 
 # =============================================================================
 # 1. DATA LOADING FUNCTIONS
@@ -246,7 +256,7 @@ def load_data(dir_name):
     return position_filtered, velocity, time
 
 # =============================================================================
-# 2. MINIMUM JERK ALGORITHM & DYNAMIC RIDGE
+# 2. CORE ALGORITHM FUNCTIONS (Unified MinJerk & LGNB)
 # =============================================================================
 
 def get_synthetic_params_cascaded(K):
@@ -294,12 +304,35 @@ def compute_minjerk_base(t, t0, t1):
     base[mask] = (1.0 / D) * (30 * tau_val**2 - 60 * tau_val**3 + 30 * tau_val**4)
     return base
 
-def build_phi_matrix(t, t_starts, t_ends):
+def compute_lgnb_base(t, t0, t1, sigma=0.5, mu=0.0, D=0.01):
+    t = np.asarray(t)
+    base = np.zeros_like(t)
+    mask = (t > t0) & (t < t1)
+    if not np.any(mask): return base
+        
+    t_val = t[mask]
+    T_window = t1 - t0
+    
+    term_log = np.log((t_val - t0) / (t1 - t_val))
+    numerator = (term_log - mu)**2
+    denom_pre = sigma * np.sqrt(2 * np.pi) * (t_val - t0) * (t1 - t_val)
+    normalized_curve = (T_window / denom_pre) * np.exp(-0.5 * (numerator / sigma**2))
+    base[mask] = D * normalized_curve
+    return base
+
+def build_phi_matrix(t, t_starts, t_ends, method='minjerk', mus=None):
     K, N = t_starts.size, t.size
     Phi = np.zeros((N, K))
+    
+    if mus is None:
+        mus = np.zeros(K)
+        
     for k in range(K):
         if t_ends[k] > t_starts[k]:
-            Phi[:, k] = compute_minjerk_base(t, t_starts[k], t_ends[k])
+            if method == 'minjerk':
+                Phi[:, k] = compute_minjerk_base(t, t_starts[k], t_ends[k])
+            elif method == 'lgnb':
+                Phi[:, k] = compute_lgnb_base(t, t_starts[k], t_ends[k], sigma=0.5, mu=mus[k])
     return Phi
 
 def solve_ridge_weighted(A, b, alpha=0.1):
@@ -314,20 +347,6 @@ def solve_ridge_weighted(A, b, alpha=0.1):
     except np.linalg.LinAlgError: x, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
     return x
 
-""" def compute_dynamic_ridge_alpha(Phi_vel, kappa_max=100.0):
-    K = Phi_vel.shape[1]
-    if K < 2: return 0.0 
-    norms = np.linalg.norm(Phi_vel, axis=0)
-    norms[norms == 0] = 1e-12 
-    sigma2 = np.mean(norms**2)
-    Phi_norm = Phi_vel / norms
-    G = Phi_norm.T @ Phi_norm
-    eigenvalues = np.linalg.eigvalsh(G)
-    lambda_min, lambda_max = max(0.0, np.min(eigenvalues)), np.max(eigenvalues)
-    kappa_current = lambda_max / lambda_min if lambda_min > 1e-12 else np.inf
-    if kappa_current <= kappa_max: return 0.0
-    lambda_star = sigma2 * (lambda_max - kappa_max * lambda_min) / (kappa_max - 1)
-    return max(0.0, lambda_star * 0.01) """
 def compute_dynamic_ridge_alpha(Phi_vel, kappa_max=100.0):
     K = Phi_vel.shape[1]
     if K < 2: return 0.0 
@@ -352,9 +371,9 @@ def compute_dynamic_ridge_alpha(Phi_vel, kappa_max=100.0):
         return 0.0
     denominator = max(kappa_max - 1, 1e-6)
     lambda_star = sigma2 * (lambda_max - kappa_max * lambda_min) / denominator
-    return max(0.0, lambda_star)
+    return max(0.00005, lambda_star)
 
-def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=0.03, verbose=False):
+def fit_hybrid_peaks_greedy_unified(t, frefs, method='minjerk', max_bases_total=100, residual_tol=0.03, verbose=False):
     if isinstance(frefs, list): F = np.column_stack(frefs)
     else: F = np.asarray(frefs)
     if F.ndim == 1: F = F.reshape(-1, 1)
@@ -365,28 +384,66 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
     N = t.size
     dt = (t[-1] - t[0]) / (N - 1) if N > 1 else 0.01
     
-    starts_found, ends_found = [], []
+    starts_found, ends_found, mus_found = [], [], []
     
     # --- PHASE A: Initial Detection ---
-    if verbose: print("  [MinJerk] Phase A: Detecting main peaks...")
-    dist_param = max(1, N // 60) 
-    peaks_indices, _ = find_peaks(vt, height=max_vt * 0.05, distance=dist_param)
+    if verbose: print(f"  [{method.upper()}] Phase A: Detecting main peaks...")
+    
+    if method == 'lgnb':
+        dist_param = max(5, N // 60)
+        peaks_indices, _ = find_peaks(vt, height=max_vt * 0.05, distance=dist_param)
+        rel_h = 0.6
+        dur_mult = 1.6
+        min_dur, max_dur = 0.3, 3.5
+        candidate_durations = np.arange(0.2, 1.5, 0.02)
+        test_mus = np.arange(MIN_MU_LIMIT, MAX_MU_LIMIT, 0.01) if OPTIMIZE_MU else [0.0]
+    else:
+        dist_param = max(1, N // 60)
+        peaks_indices, _ = find_peaks(vt, height=max_vt * 0.05, distance=dist_param)
+        rel_h = 0.85
+        dur_mult = 1.8
+        min_dur, max_dur = 0.2, 3.5
+        candidate_durations = np.arange(0.2, 3.5, 0.01)
+        test_mus = [0.0]
+
     if verbose: print(f"    Found {len(peaks_indices)} initial peaks.")
     
     if len(peaks_indices) > 0:
-        widths, _, left_ips, right_ips = peak_widths(vt, peaks_indices, rel_height=0.85)
+        widths, _, left_ips, right_ips = peak_widths(vt, peaks_indices, rel_height=rel_h)
         for i, idx in enumerate(peaks_indices):
             t_left = left_ips[i] * dt + t[0]
             t_right = right_ips[i] * dt + t[0]
             center_time = (t_left + t_right) / 2.0
             width_fwhm = t_right - t_left
             
-            duration = np.clip(width_fwhm * 1.8, 0.2, 3.5)
-            starts_found.append(center_time - (duration / 2.0))
-            ends_found.append(center_time + (duration / 2.0))
+            duration = np.clip(width_fwhm * dur_mult, min_dur, max_dur)
+            t_start_est = center_time - (duration / 2.0)
+            t_end_est = center_time + (duration / 2.0)
+            
+            best_mu_init = 0.0
+            best_score_init = -np.inf
+
+            for mu_test in test_mus:
+                if method == 'lgnb':
+                    base_tmp = compute_lgnb_base(t, t_start_est, t_end_est, mu=mu_test, sigma=0.5)
+                else:
+                    base_tmp = compute_minjerk_base(t, t_start_est, t_end_est)
+                    
+                dot_prod = np.dot(vt, base_tmp)
+                norm_sq = np.dot(base_tmp, base_tmp) + 1e-9
+                
+                if dot_prod > 0:
+                    score = (dot_prod**2) / norm_sq
+                    if score > best_score_init:
+                        best_score_init = score
+                        best_mu_init = mu_test
+            
+            starts_found.append(t_start_est)
+            ends_found.append(t_end_est)
+            mus_found.append(best_mu_init)
 
     if len(starts_found) > 0:
-        Phi = build_phi_matrix(t, np.array(starts_found), np.array(ends_found))
+        Phi = build_phi_matrix(t, np.array(starts_found), np.array(ends_found), method=method, mus=np.array(mus_found))
         s, _ = nnls(Phi, vt)
         residual = vt - Phi.dot(s)
     else:
@@ -396,10 +453,8 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
     if verbose: print(f"    Initial RMS after Phase A: {rms:.4f} and error to avoid adding more bases: {max_vt * residual_tol:.4f}")
     
     # --- PHASE B: Grid Search ---
-    candidate_durations = np.arange(0.2, 3.5, 0.01)
-    
     if rms > max_vt * residual_tol:
-        if verbose: print(f"  [MinJerk] Phase B: Grid Search Duration...")
+        if verbose: print(f"  [{method.upper()}] Phase B: Grid Search Duration...")
         
         for k in range(max_bases_total - len(starts_found)):
             idx_max = np.argmax(residual)
@@ -413,6 +468,7 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
                     continue
             
             best_dur = None
+            best_mu = None
             best_score = -np.inf
             
             for dur in candidate_durations:
@@ -425,16 +481,22 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
                         is_nested = True; break
                 if is_nested: continue 
 
-                base_tmp = compute_minjerk_base(t, t0_try, t1_try)
-                dot_prod = np.dot(residual, base_tmp)
-                if dot_prod <= 0: continue
+                for mu_try in test_mus:
+                    if method == 'lgnb':
+                        base_tmp = compute_lgnb_base(t, t0_try, t1_try, mu=mu_try, sigma=0.5)
+                    else:
+                        base_tmp = compute_minjerk_base(t, t0_try, t1_try)
+
+                    dot_prod = np.dot(residual, base_tmp)
+                    if dot_prod <= 0: continue
+                        
+                    norm_sq = np.dot(base_tmp, base_tmp) + 1e-9
+                    score = (dot_prod**2) / norm_sq
                     
-                norm_sq = np.dot(base_tmp, base_tmp) + 1e-9
-                score = (dot_prod**2) / norm_sq
-                
-                if score > best_score:
-                    best_score = score
-                    best_dur = dur
+                    if score > best_score:
+                        best_score = score
+                        best_dur = dur
+                        best_mu = mu_try
             
             if best_dur is None: 
                 residual[max(0, idx_max-10):min(N, idx_max+10)] = 0
@@ -442,64 +504,94 @@ def fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=100, residual_tol=
 
             starts_found.append(t_res_peak - (best_dur / 2.0))
             ends_found.append(t_res_peak + (best_dur / 2.0))
+            mus_found.append(best_mu)
             
-            Phi_new = build_phi_matrix(t, np.array(starts_found), np.array(ends_found))
+            Phi_new = build_phi_matrix(t, np.array(starts_found), np.array(ends_found), method=method, mus=np.array(mus_found))
             s_new, _ = nnls(Phi_new, vt)
             residual = vt - Phi_new.dot(s_new)
 
-    return np.array(starts_found), np.array(ends_found)
+    return np.array(starts_found), np.array(ends_found), np.array(mus_found)
 
-def compute_position_error_minjerk(params, t, P_ref):
+def compute_position_error_unified(params, t, P_ref, method):
     """
-    Dimension-agnostic error function (works for 2D and 3D) with Dynamic Ridge.
+    Dimension-agnostic error function (works for 2D and 3D) with Dynamic Ridge for both methods.
     """
     N, D = P_ref.shape 
-    K = params.size // 2
-    t_starts, t_ends = params[:K], params[K:]
+    
+    if method == 'lgnb' and OPTIMIZE_MU:
+        K = params.size // 3
+        t_starts = params[:K]
+        t_ends = params[K:2*K]
+        mus_current = params[2*K:]
+    else:
+        K = params.size // 2
+        t_starts = params[:K]
+        t_ends = params[K:]
+        mus_current = np.zeros(K)
+        
     MAX_DURATION = 5.0 
     
     if np.any(t_starts >= t_ends - 0.02) or np.any((t_ends - t_starts) > MAX_DURATION): return 1e12
 
-    Phi_vel = build_phi_matrix(t, t_starts, t_ends)
+    Phi_vel = build_phi_matrix(t, t_starts, t_ends, method=method, mus=mus_current)
     Phi_pos = np.zeros_like(Phi_vel)
     for k in range(K): Phi_pos[:, k] = cumtrapz(Phi_vel[:, k], t, initial=0.0)
 
-    alpha_dynamic = compute_dynamic_ridge_alpha(Phi_pos, kappa_max=100.0)
+    global USE_DYNAMIC_ALPHA, GLOBAL_ALPHA
+    if USE_DYNAMIC_ALPHA:
+        alpha_val = compute_dynamic_ridge_alpha(Phi_pos, kappa_max=100.0)
+    else:
+        alpha_val = GLOBAL_ALPHA
+
     A = np.hstack([Phi_pos, np.ones((N, 1))])
 
     total_error = 0
     for d in range(D):
-        w = solve_ridge_weighted(A, P_ref[:, d], alpha=alpha_dynamic)
+        w = solve_ridge_weighted(A, P_ref[:, d], alpha=alpha_val)
         fit_d = A.dot(w)
         total_error += np.sum((fit_d - P_ref[:, d])**2)
         
     return total_error
 
-def refine_bases_minjerk(t, P_ref, t_starts_init, t_ends_init, verbose=False, step_title="Global Opt"):
-    print(f"\n{step_title}: Optimizing {t_starts_init.size} bases (Dynamic Ridge)...")
+def refine_bases_unified(t, P_ref, t_starts_init, t_ends_init, mus_init, method, verbose=False, step_title="Global Opt"):
+    print(f"\n{step_title}: Optimizing {t_starts_init.size} bases ({method.upper()} | Dynamic Ridge)...")
     K = t_starts_init.size
-    params_init = np.concatenate([t_starts_init, t_ends_init])
-    bounds = [(t[0]-0.5, t[-1]+0.5)] * (2 * K)
+    
+    if method == 'lgnb' and OPTIMIZE_MU:
+        params_init = np.concatenate([t_starts_init, t_ends_init, mus_init])
+        bounds = [(t[0]-0.5, t[-1]+0.5)] * (2 * K) + [(MIN_MU_LIMIT, MAX_MU_LIMIT)] * K
+    else:
+        params_init = np.concatenate([t_starts_init, t_ends_init])
+        bounds = [(t[0]-0.5, t[-1]+0.5)] * (2 * K)
         
     t0 = time.time()
-    res = minimize(compute_position_error_minjerk, params_init, args=(t, P_ref),
+    res = minimize(compute_position_error_unified, params_init, args=(t, P_ref, method),
                 method='L-BFGS-B', bounds=bounds, options={'maxiter': 2000, 'disp': verbose})
     
     if verbose: print(f"  Done in {time.time()-t0:.2f}s. Cost: {res.fun:.4e}")
     params_opt = res.x
-    ts, te = params_opt[:K], params_opt[K:]
-    idx = np.argsort(ts)
-    return ts[idx], te[idx]
+    
+    if method == 'lgnb' and OPTIMIZE_MU:
+        ts = params_opt[:K]
+        te = params_opt[K:2*K]
+        mu_out = params_opt[2*K:]
+    else:
+        ts = params_opt[:K]
+        te = params_opt[K:]
+        mu_out = mus_init
 
-def merge_bases_minjerk(t_starts, t_ends, scales, proximity_tol=0.05):
+    idx = np.argsort(ts)
+    return ts[idx], te[idx], mu_out[idx]
+
+def merge_bases_unified(t_starts, t_ends, mus, scales, proximity_tol=0.05):
     """
     Dimension-agnostic function to merge submovements.
     """
     K, D = scales.shape
-    if K < 2: return t_starts, t_ends, scales
+    if K < 2: return t_starts, t_ends, mus, scales
     
     centers, durations = (t_starts + t_ends) / 2.0, t_ends - t_starts
-    new_ts, new_te, new_scales = [], [], []
+    new_ts, new_te, new_mus, new_scales = [], [], [], []
     visited = np.zeros(K, dtype=bool)
     
     for i in range(K):
@@ -519,17 +611,18 @@ def merge_bases_minjerk(t_starts, t_ends, scales, proximity_tol=0.05):
         
         new_ts.append(np.sum(t_starts[idx_g] * mags) / total_mag)
         new_te.append(np.sum(t_ends[idx_g] * mags) / total_mag)
+        new_mus.append(np.sum(mus[idx_g] * mags) / total_mag)
         new_scales.append(np.sum(scales[idx_g], axis=0))
         
-    return np.array(new_ts), np.array(new_te), np.array(new_scales)
+    return np.array(new_ts), np.array(new_te), np.array(new_mus), np.array(new_scales)
 
 # =============================================================================
 # 3. PLOTTING FUNCTIONS
 # =============================================================================
 
-def plot_velocity_and_bases(t, v_ref, v_fit, t_starts, t_ends, scales_dim, dim_color='tab:red', title='Velocity dim'):
+def plot_velocity_and_bases(t, v_ref, v_fit, t_starts, t_ends, mus, scales_dim, method='minjerk', dim_color='tab:red', title='Velocity dim'):
     N = t.size
-    Phi = build_phi_matrix(t, t_starts, t_ends) if t_starts.size > 0 else np.zeros((N, 0))
+    Phi = build_phi_matrix(t, t_starts, t_ends, method=method, mus=mus) if t_starts.size > 0 else np.zeros((N, 0))
     scaled = Phi * scales_dim[None, :] if Phi.size > 0 else np.zeros((N, 0))
     
     plt.figure(figsize=(10, 5))
@@ -538,7 +631,7 @@ def plot_velocity_and_bases(t, v_ref, v_fit, t_starts, t_ends, scales_dim, dim_c
 
     has_base_label = False
     for k in range(scaled.shape[1]):
-        plt.fill_between(t, 0, scaled[:, k], alpha=0.3, color=dim_color, label='MinJerk Bases' if not has_base_label else None, linewidth=0)
+        plt.fill_between(t, 0, scaled[:, k], alpha=0.3, color=dim_color, label=f'{method.upper()} Bases' if not has_base_label else None, linewidth=0)
         plt.plot(t, scaled[:, k], color=dim_color, alpha=0.8, lw=1) 
         has_base_label = True
         
@@ -593,7 +686,7 @@ def plot_3d_trajectory_pos(P_ref, P_fit):
     fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection='3d')
     ax.plot(P_ref[:,0], P_ref[:,1], P_ref[:,2], 'k-', label='Original', lw=1)
-    ax.plot(P_fit[:,0], P_fit[:,1], P_fit[:,2], 'r--', label='MinJerk Fit', lw=2)
+    ax.plot(P_fit[:,0], P_fit[:,1], P_fit[:,2], 'r--', label='Reconstructed', lw=2)
     ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
     ax.set_title('3D Trajectory: Real vs Fitted')
     ax.legend()
@@ -619,15 +712,41 @@ def plot_2d_trajectory_pos(P_ref, P_fit):
 
 if __name__ == '__main__':
     
+    parser = argparse.ArgumentParser(description="SubID algorithm.")
+    parser.add_argument('--dataset', type=str, default='LETTERS',
+                        help="Datatsest that you can test. Options: "
+                            "'SYNTHETIC', 'PUSHT', 'PUSHTReal2d', 'SUBJECT', "
+                            "'LETTERS', 'PUSHTReal3d', 'SPATULA', 'MOVING3D'")
+    parser.add_argument('--alpha', type=str, default='dynamic',
+                        help="Ridge regression alpha. Use 'dynamic' for automatic calculation, or provide a global float value (e.g., 0.05).")
+    parser.add_argument('--method', type=str, default='minjerk', choices=['minjerk', 'lgnb'],
+                        help="Submovement primitive method to use: 'minjerk' or 'lgnb'. Default is 'minjerk'.")
+    
+    args = parser.parse_args()
+
+    # Handle global variables based on argparse input
+    if args.alpha.lower() == 'dynamic':
+        USE_DYNAMIC_ALPHA = True
+        GLOBAL_ALPHA = 0.0
+    else:
+        USE_DYNAMIC_ALPHA = False
+        try:
+            GLOBAL_ALPHA = float(args.alpha)
+        except ValueError:
+            print(f"Error: --alpha must be 'dynamic' or a valid float. Received: {args.alpha}")
+            exit(1)
+
+    METHOD = args.method.lower()
+
     # --- SELECT DATA ---
-    DATA_SOURCE = 'LETTERS' # 'PUSHT' or 'PUSHTReal2d' or 'SUBJECT' or 'PUSHTReal3d' or 'SYNTHETIC' or 'LETTERS' or 'MOVING3D' or 'SPATULA'
+    DATA_SOURCE = args.dataset
     
     PUSHT_SIMULATED = "data/pusht_real/real_pusht_20230105/replay_buffer.zarr"
     PUSHT_REAL_2D = "data/EPFL_data/adrian_adrian2D_2026-03-13-13-50/data.zarr"
     SUBJECT_STROKE = "data/subject_stroke/subject08day1post"
     PUSHT_REAL_3D = "data/EPFL_data/adrian_adrian3D_2026-03-13-16-04/data.zarr"
     MOVING_DATA = "data/moving_object/object_moving_tangential_velocity_data.csv"
-    LETTERS_PATH = "data/Handwriting/character_A_minjerk.zarr" #!Here change the letter
+    LETTERS_PATH = "data/Handwriting/character_D_minjerk.zarr" 
     SPATULA_PATH = "data/adrian_data/pushing_2026-02-20-16-16/spatula_pose_raw.zarr"
     
     print(f"--- 1. LOADING {DATA_SOURCE} ---")
@@ -646,7 +765,7 @@ if __name__ == '__main__':
         ts_gt, te_gt, sx_gt, sy_gt, p0_gt = get_synthetic_params_cascaded(K_TARGET)
         
         t = np.linspace(0, DURATION, N_SAMPLES)
-        Phi_gt = build_phi_matrix(t, ts_gt, te_gt)
+        Phi_gt = build_phi_matrix(t, ts_gt, te_gt, method=METHOD)
         
         vx = Phi_gt.dot(sx_gt)
         vy = Phi_gt.dot(sy_gt)
@@ -711,33 +830,6 @@ if __name__ == '__main__':
             V_ref[:, i] = np.gradient(P[:, i], t)
         vt_ref = np.linalg.norm(V_ref, axis=1)
         print(f"Loaded Episode {EPISODE_IDX}. Samples: {N}.")
-    
-    elif DATA_SOURCE == 'SPATULA' :
-        (states_raw, times_raw, episode_ends_raw, 
-        states_proc, times_proc, episode_ends_proc) = import_data(SPATULA_PATH,lowpass_cutoff=1.0)
-        
-        EPISODE_IDX = 1
-        start_proc = 0 if EPISODE_IDX == 0 else episode_ends_proc[EPISODE_IDX-1]
-        end_proc = episode_ends_proc[EPISODE_IDX]
-        t_proc_ep = times_proc[start_proc:end_proc]
-        p_proc_ep = states_proc[start_proc:end_proc, :3] 
-        
-        t = t_proc_ep - t_proc_ep[0]
-        
-        print("Total time (s):", t[-1])
-        P = p_proc_ep
-        xs, ys, zs = P[:, 0], P[:, 1], P[:, 2]
-
-        V_ref_3d = np.zeros_like(P)
-        for i in range(3):
-            V_ref_3d[:, i] = np.gradient(P[:, i], t)
-        
-        vt_ref = np.linalg.norm(V_ref_3d, axis=1)
-        
-        vt = np.linalg.norm(V_ref_3d, axis=1)
-        vx = V_ref_3d[:, 0]
-        vy = V_ref_3d[:, 1]
-        vz = V_ref_3d[:, 2]
         
     elif DATA_SOURCE == 'SUBJECT':
         position_filtered, velocity_list, time_list = load_data(SUBJECT_STROKE)
@@ -827,7 +919,34 @@ if __name__ == '__main__':
         
     elif DATA_SOURCE == 'PUSHTReal3d' :
         (states_raw, times_raw, episode_ends_raw, 
-        states_proc, times_proc, episode_ends_proc) = import_data_filtered(PUSHT_REAL_3D)
+        states_proc, times_proc, episode_ends_proc) = import_data_filtered(PUSHT_REAL_3D, lowpass_cutoff=20.0)
+        
+        EPISODE_IDX = 1
+        start_proc = 0 if EPISODE_IDX == 0 else episode_ends_proc[EPISODE_IDX-1]
+        end_proc = episode_ends_proc[EPISODE_IDX]
+        t_proc_ep = times_proc[start_proc:end_proc]
+        p_proc_ep = states_proc[start_proc:end_proc, :3] 
+        
+        t = t_proc_ep - t_proc_ep[0]
+        
+        print("Total time (s):", t[-1])
+        P = p_proc_ep
+        xs, ys, zs = P[:, 0], P[:, 1], P[:, 2]
+
+        V_ref_3d = np.zeros_like(P)
+        for i in range(3):
+            V_ref_3d[:, i] = np.gradient(P[:, i], t)
+        
+        vt_ref = np.linalg.norm(V_ref_3d, axis=1)
+        
+        vt = np.linalg.norm(V_ref_3d, axis=1)
+        vx = V_ref_3d[:, 0]
+        vy = V_ref_3d[:, 1]
+        vz = V_ref_3d[:, 2]
+        
+    elif DATA_SOURCE == 'SPATULA' :
+        (states_raw, times_raw, episode_ends_raw, 
+        states_proc, times_proc, episode_ends_proc) = import_data(SPATULA_PATH,lowpass_cutoff=1.0)
         
         EPISODE_IDX = 1
         start_proc = 0 if EPISODE_IDX == 0 else episode_ends_proc[EPISODE_IDX-1]
@@ -887,52 +1006,62 @@ if __name__ == '__main__':
     D_dim = P.shape[1]
     print(f"  -> Detected Spatial Dimension: {D_dim}D")
 
-    # --- MINJERK ALGORITHM START (Dynamic and Dimensionally Agnostic) ---
-    print("\nSTEP 1: Getting initial guess (MinJerk Greedy)...")
+    # --- ALGORITHM START (Dynamic and Dimensionally Agnostic) ---
+    print(f"\nSTEP 1: Getting initial guess ({METHOD.upper()} Greedy)...")
     t_init_contador = time.time()
     
     # 1. Greedy Initialization (Uses velocities of each dimension)
     frefs = [V_ref[:, d] for d in range(D_dim)]
-    ts_init, te_init = fit_hybrid_peaks_greedy_minjerk(t, frefs, max_bases_total=1000, residual_tol=0.03, verbose=True)
+    ts_init, te_init, mus_init = fit_hybrid_peaks_greedy_unified(t, frefs, method=METHOD, max_bases_total=1000, residual_tol=0.03, verbose=True)
 
     # 2. Global Optimization (Uses the dimension-agnostic function)
-    ts_opt, te_opt = refine_bases_minjerk(t, P, ts_init, te_init, verbose=False)
+    ts_opt, te_opt, mus_opt = refine_bases_unified(t, P, ts_init, te_init, mus_init, method=METHOD, verbose=False)
     
     # 3. Merging (Calculates temporal scales with Dynamic Ridge)
-    Phi_vel = build_phi_matrix(t, ts_opt, te_opt)
+    Phi_vel = build_phi_matrix(t, ts_opt, te_opt, method=METHOD, mus=mus_opt)
     Phi_pos = np.zeros_like(Phi_vel)
     for k in range(Phi_pos.shape[1]): Phi_pos[:, k] = cumtrapz(Phi_vel[:, k], t, initial=0.0)
     
     A_temp = np.hstack([Phi_pos, np.ones((len(t), 1))])
-    alpha_dynamic_temp = compute_dynamic_ridge_alpha(A_temp[:, :-1], kappa_max=100.0)
-    print(f"Pre-Merge Dynamic Ridge Alpha: {alpha_dynamic_temp}")
     
+    if USE_DYNAMIC_ALPHA:
+        alpha_temp = compute_dynamic_ridge_alpha(A_temp[:, :-1], kappa_max=100.0)
+        print(f"Pre-Merge Dynamic Ridge Alpha: {alpha_temp}")
+    else:
+        alpha_temp = GLOBAL_ALPHA
+        print(f"Pre-Merge Fixed Ridge Alpha: {alpha_temp}")
+        
     scales_list_temp = []
     for d in range(D_dim):
-        w = solve_ridge_weighted(A_temp, P[:, d], alpha=alpha_dynamic_temp)
+        w = solve_ridge_weighted(A_temp, P[:, d], alpha=alpha_temp)
         scales_list_temp.append(w[:-1])
     scales_temp = np.column_stack(scales_list_temp)
     
     print("\nSTEP 3: Merging & Re-Optimization...")
-    ts_final, te_final, scales_final = merge_bases_minjerk(ts_opt, te_opt, scales_temp, proximity_tol=0.04)
-    ts_final, te_final = refine_bases_minjerk(t, P, ts_final, te_final, verbose=False, step_title="Final Refine")
+    ts_final, te_final, mus_final, scales_final = merge_bases_unified(ts_opt, te_opt, mus_opt, scales_temp, proximity_tol=0.04)
+    ts_final, te_final, mus_final = refine_bases_unified(t, P, ts_final, te_final, mus_final, method=METHOD, verbose=False, step_title="Final Refine")
     
     K_final = ts_final.size
     
     # 4. Final Reconstruction
-    Phi_vel_final = build_phi_matrix(t, ts_final, te_final)
+    Phi_vel_final = build_phi_matrix(t, ts_final, te_final, method=METHOD, mus=mus_final)
     Phi_pos_final = np.zeros_like(Phi_vel_final)
     for k in range(K_final): Phi_pos_final[:, k] = cumtrapz(Phi_vel_final[:, k], t, initial=0.0)
 
     A_final = np.hstack([Phi_pos_final, np.ones((len(t), 1))])
-    alpha_dynamic_final = compute_dynamic_ridge_alpha(A_final[:, :-1], kappa_max=100.0)
-    print(f"Final Dynamic Ridge Alpha: {alpha_dynamic_final}")
     
+    if USE_DYNAMIC_ALPHA:
+        alpha_final = compute_dynamic_ridge_alpha(A_final[:, :-1], kappa_max=100.0)
+        print(f"Final Dynamic Ridge Alpha: {alpha_final}")
+    else:
+        alpha_final = GLOBAL_ALPHA
+        print(f"Final Fixed Ridge Alpha: {alpha_final}")
+        
     scales_list_final = []
     p0_list = []
     
     for d in range(D_dim):
-        w = solve_ridge_weighted(A_final, P[:, d], alpha=alpha_dynamic_final)
+        w = solve_ridge_weighted(A_final, P[:, d], alpha=alpha_final)
         scales_list_final.append(w[:-1])
         p0_list.append(w[-1]) 
         
@@ -952,7 +1081,7 @@ if __name__ == '__main__':
     print(f"RMSE {D_dim}D: {rmse:.5f}")
 
     # --- PLOTS ---
-    print(f"\nGenerating Plots (MinJerk {D_dim}D)...")
+    print(f"\nGenerating Plots ({METHOD.upper()} {D_dim}D)...")
     
     dim_names = ['X', 'Y', 'Z'] if is_3d else ['X', 'Y']
     pos_colors = ['tab:red', 'tab:green', 'tab:orange']
@@ -960,12 +1089,12 @@ if __name__ == '__main__':
     
     for d in range(D_dim):
         plot_position_and_integrated_bases(t, P[:, d], P_fit[:, d], ts_final, te_final, Phi_pos_final, scales_final[:, d], 
-                                        pos_color=pos_colors[d], neg_color=neg_colors[d], title=f'Pos {dim_names[d]} (MinJerk)')
+                                        pos_color=pos_colors[d], neg_color=neg_colors[d], title=f'Pos {dim_names[d]} ({METHOD.upper()})')
         plot_velocity_and_bases_signed(t, V_ref[:, d], V_fit[:, d], ts_final, te_final, Phi_vel_final, scales_final[:, d], 
-                                    pos_color=pos_colors[d], neg_color=neg_colors[d], title=f'Vel {dim_names[d]} (MinJerk)')
+                                    pos_color=pos_colors[d], neg_color=neg_colors[d], title=f'Vel {dim_names[d]} ({METHOD.upper()})')
 
-    plot_velocity_and_bases(t, vt_ref, vt_fit, ts_final, te_final, scales_mag, 
-                            dim_color='tab:orange', title='Final Tangential Velocity (MinJerk)')
+    plot_velocity_and_bases(t, vt_ref, vt_fit, ts_final, te_final, mus_final, scales_mag, 
+                            method=METHOD, dim_color='tab:orange', title=f'Final Tangential Velocity ({METHOD.upper()})')
 
     if is_3d:
         plot_3d_trajectory_pos(P, P_fit)
@@ -974,18 +1103,18 @@ if __name__ == '__main__':
     
     print(f"\nAll plots saved in 'Plots/Plots_AutomaticRidge_MultiDataset'")
 
-    print(f"\nFinal Parameters (MinJerk {D_dim}D):")
+    print(f"\nFinal Parameters ({METHOD.upper()} {D_dim}D):")
     if is_3d:
-        print(f"{'ID':<3} | {'Start':<8} | {'End':<8} | {'Dur':<8} | {'Sx':<8} | {'Sy':<8} | {'Sz':<8}")
+        print(f"{'ID':<3} | {'Start':<8} | {'End':<8} | {'Dur':<8} | {'Mu':<6} | {'Sx':<8} | {'Sy':<8} | {'Sz':<8}")
     else:
-        print(f"{'ID':<3} | {'Start':<8} | {'End':<8} | {'Dur':<8} | {'Sx':<8} | {'Sy':<8}")
+        print(f"{'ID':<3} | {'Start':<8} | {'End':<8} | {'Dur':<8} | {'Mu':<6} | {'Sx':<8} | {'Sy':<8}")
         
     sort_idx = np.argsort(ts_final)
     for k in range(K_final):
         idx = sort_idx[k]
         dur = te_final[idx] - ts_final[idx]
-        row = [k, ts_final[idx], te_final[idx], dur] + [scales_final[idx, d] for d in range(D_dim)]
+        row = [k, ts_final[idx], te_final[idx], dur, mus_final[idx]] + [scales_final[idx, d] for d in range(D_dim)]
         if is_3d:
-            print(f"{row[0]:<3} | {row[1]:.3f}    | {row[2]:.3f}    | {row[3]:.3f}    | {row[4]:.3f} | {row[5]:.3f}    | {row[6]:.3f}")
+            print(f"{row[0]:<3} | {row[1]:.3f}    | {row[2]:.3f}    | {row[3]:.3f}    | {row[4]:.3f}  | {row[5]:.3f}    | {row[6]:.3f}    | {row[7]:.3f}")
         else:
-            print(f"{row[0]:<3} | {row[1]:.3f}    | {row[2]:.3f}    | {row[3]:.3f}    | {row[4]:.3f} | {row[5]:.3f}")
+            print(f"{row[0]:<3} | {row[1]:.3f}    | {row[2]:.3f}    | {row[3]:.3f}    | {row[4]:.3f}  | {row[5]:.3f}    | {row[6]:.3f}")
