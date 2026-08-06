@@ -25,26 +25,26 @@ The script is executed via the command line and includes a fully integrated argu
 You can customize the execution of the algorithm by passing the following flags:
 
 *   `--dataset`
-    *   **Description:** Defines the specific data source or trajectory you want to load and analyze[cite: 12]. The script automatically adapts to the spatial dimensions (2D or 3D) and applies the corresponding filtering and preprocessing required for the selected dataset[cite: 12].
-    *   **Available Options:** `'SYNTHETIC'`, `'PUSHT'`, `'PUSHTReal2d'`, `'SUBJECT'`, `'LETTERS'`, `'PUSHTReal3d'`, `'SPATULA'`, `'MOVING3D'`[cite: 12].
-    *   **Default:** `'LETTERS'`[cite: 12].
+    *   **Description:** Defines the specific data source or trajectory you want to load and analyze. The script automatically adapts to the spatial dimensions (2D or 3D) and applies the corresponding filtering and preprocessing required for the selected dataset.
+    *   **Available Options:** `'SYNTHETIC'`, `'PUSHT'`, `'PUSHTReal2d'`, `'SUBJECT'`, `'LETTERS'`, `'PUSHTReal3d'`, `'SPATULA'`, `'MOVING3D'`.
+    *   **Default:** `'LETTERS'`.
 
 *   `--method`
-    *   **Description:** Specifies the mathematical primitive model used to decompose the velocity profile of the submovements[cite: 12]. 
+    *   **Description:** Specifies the mathematical primitive model used to decompose the velocity profile of the submovements. 
     *   **Available Options:** 
-        *   `minjerk`: Uses Minimum Jerk models (symmetric, polynomial, bell-shaped profiles)[cite: 12].
-        *   `lgnb`: Uses Log-Normal Bases (asymmetric profiles, dynamically optimizing the skewness parameter $\mu$)[cite: 12].
-    *   **Default:** `'minjerk'`[cite: 12].
+        *   `minjerk`: Uses Minimum Jerk models (symmetric, polynomial, bell-shaped profiles).
+        *   `lgnb`: Uses Log-Normal Bases (asymmetric profiles, dynamically optimizing the skewness parameter $\mu$).
+    *   **Default:** `'minjerk'`.
 
 *   `--alpha`
-    *   **Description:** Controls the Ridge Regression ($\alpha$) penalty strategy applied during the spatial reconstruction step[cite: 12].
+    *   **Description:** Controls the Ridge Regression ($\alpha$) penalty strategy applied during the spatial reconstruction step.
     *   **Available Options:**
-        *   `dynamic`: The algorithm automatically calculates the optimal penalty at each step based on the temporal overlap (collinearity) of the velocity bases[cite: 12].
-        *   `<float>` (e.g., `0.05` or `0.0000`): Forces a fixed, global penalty across the entire optimization process[cite: 12]. *Note: When using the `lgnb` method on real data, a very low penalty (e.g., `0.0000`) is often recommended to prevent aggressive coefficient cancellation caused by the collinearity of the asymmetric tails.*
-    *   **Default:** `'dynamic'`[cite: 12].
+        *   `dynamic`: The algorithm automatically calculates the optimal penalty at each step based on the temporal overlap (collinearity) of the velocity bases.
+        *   `<float>` (e.g., `0.05` or `0.0000`): Forces a fixed, global penalty across the entire optimization process. *Note: When using the `lgnb` method on real data, a very low penalty (e.g., `0.0000`) is often recommended to prevent aggressive coefficient cancellation caused by the collinearity of the asymmetric tails.*
+    *   **Default:** `'dynamic'`.
 
 *   `-h` or `--help`
-    *   **Description:** Displays a help message in the console summarizing all available commands and exits[cite: 12].
+    *   **Description:** Displays a help message in the console summarizing all available commands and exits.
 
 ### 📖 Usage Examples
 
