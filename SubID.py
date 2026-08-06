@@ -24,14 +24,14 @@ np.set_printoptions(precision=4, suppress=True)
 # 1. DATA LOADING FUNCTIONS
 # =============================================================================
 
-def import_data(zarr_root_str: str):
+def import_data(zarr_root_str: str, lowpass_cutoff=4.0, target_hz=100.0, butter_order=4):
     zarr_root = Path(zarr_root_str)
     print(f"Loading Zarr: {zarr_root}")
     zarr_data = zarr.open(str(zarr_root), mode="r")
     
-    target_hz = 100.0
-    lowpass_cutoff = 4 
-    butter_order = 4
+    target_hz = target_hz
+    lowpass_cutoff = lowpass_cutoff 
+    butter_order = butter_order
     
     episode_ends_raw = zarr_data["data/episode_ends"][:]  
     states_raw = zarr_data["data/flat_spatula"][:] if "data/flat_spatula" in zarr_data else zarr_data["data/state"][:]
@@ -620,14 +620,15 @@ def plot_2d_trajectory_pos(P_ref, P_fit):
 if __name__ == '__main__':
     
     # --- SELECT DATA ---
-    DATA_SOURCE = 'MOVING3D' # 'PUSHT' or 'PUSHTReal2d' or 'SUBJECT' or 'PUSHTReal3d' or 'SYNTHETIC' or 'LETTERS' or 'MOVING3D'
+    DATA_SOURCE = 'LETTERS' # 'PUSHT' or 'PUSHTReal2d' or 'SUBJECT' or 'PUSHTReal3d' or 'SYNTHETIC' or 'LETTERS' or 'MOVING3D' or 'SPATULA'
     
     PUSHT_SIMULATED = "data/pusht_real/real_pusht_20230105/replay_buffer.zarr"
     PUSHT_REAL_2D = "data/EPFL_data/adrian_adrian2D_2026-03-13-13-50/data.zarr"
     SUBJECT_STROKE = "data/subject_stroke/subject08day1post"
     PUSHT_REAL_3D = "data/EPFL_data/adrian_adrian3D_2026-03-13-16-04/data.zarr"
     MOVING_DATA = "data/moving_object/object_moving_tangential_velocity_data.csv"
-    LETTERS_PATH = "data/Handwriting/character_D_minjerk.zarr" 
+    LETTERS_PATH = "data/Handwriting/character_A_minjerk.zarr" #!Here change the letter
+    SPATULA_PATH = "data/adrian_data/pushing_2026-02-20-16-16/spatula_pose_raw.zarr"
     
     print(f"--- 1. LOADING {DATA_SOURCE} ---")
     
@@ -710,6 +711,33 @@ if __name__ == '__main__':
             V_ref[:, i] = np.gradient(P[:, i], t)
         vt_ref = np.linalg.norm(V_ref, axis=1)
         print(f"Loaded Episode {EPISODE_IDX}. Samples: {N}.")
+    
+    elif DATA_SOURCE == 'SPATULA' :
+        (states_raw, times_raw, episode_ends_raw, 
+        states_proc, times_proc, episode_ends_proc) = import_data(SPATULA_PATH,lowpass_cutoff=1.0)
+        
+        EPISODE_IDX = 1
+        start_proc = 0 if EPISODE_IDX == 0 else episode_ends_proc[EPISODE_IDX-1]
+        end_proc = episode_ends_proc[EPISODE_IDX]
+        t_proc_ep = times_proc[start_proc:end_proc]
+        p_proc_ep = states_proc[start_proc:end_proc, :3] 
+        
+        t = t_proc_ep - t_proc_ep[0]
+        
+        print("Total time (s):", t[-1])
+        P = p_proc_ep
+        xs, ys, zs = P[:, 0], P[:, 1], P[:, 2]
+
+        V_ref_3d = np.zeros_like(P)
+        for i in range(3):
+            V_ref_3d[:, i] = np.gradient(P[:, i], t)
+        
+        vt_ref = np.linalg.norm(V_ref_3d, axis=1)
+        
+        vt = np.linalg.norm(V_ref_3d, axis=1)
+        vx = V_ref_3d[:, 0]
+        vy = V_ref_3d[:, 1]
+        vz = V_ref_3d[:, 2]
         
     elif DATA_SOURCE == 'SUBJECT':
         position_filtered, velocity_list, time_list = load_data(SUBJECT_STROKE)
