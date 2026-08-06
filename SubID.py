@@ -79,14 +79,14 @@ def import_data(zarr_root_str: str, lowpass_cutoff=4.0, target_hz=100.0, butter_
 
     return (states_raw, times_raw, episode_ends_raw, states_processed_all, target_times_all, episode_ends_processed)
 
-def import_data_filtered(zarr_root_str: str):
+def import_data_filtered(zarr_root_str: str, lowpass_cutoff=4.0, target_hz=100.0, butter_order=4):
     zarr_root = Path(zarr_root_str)
     print(f"Loading Zarr (Filtered): {zarr_root}")
     zarr_data = zarr.open(str(zarr_root), mode="r")
     
-    target_hz = 100.0
-    lowpass_cutoff = 4.0 
-    butter_order = 4
+    target_hz = target_hz
+    lowpass_cutoff = lowpass_cutoff 
+    butter_order = butter_order
     
     episode_ends_raw = zarr_data["data/episode_ends"][:]  
     states_raw = zarr_data["data/flat_spatula"][:] if "data/flat_spatula" in zarr_data else zarr_data["data/state"][:]
@@ -224,7 +224,7 @@ def load_data(dir_name):
     for block in range(1, max_block + 1):
         for trial in range(1, max_trial + 1):
             trial_index = [i for i, (_block, _trial) in enumerate(zip(blocks, trials))
-                           if _block == block and _trial == trial]
+                        if _block == block and _trial == trial]
             if not trial_index:
                 continue
 
