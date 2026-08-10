@@ -400,10 +400,10 @@ def fit_hybrid_peaks_greedy_unified(t, frefs, method='minjerk', max_bases_total=
     else:
         dist_param = max(1, N // 60)
         peaks_indices, _ = find_peaks(vt, height=max_vt * 0.05, distance=dist_param)
-        rel_h = 0.85
+        rel_h = 0.7
         dur_mult = 1.8
         min_dur, max_dur = 0.2, 3.5
-        candidate_durations = np.arange(0.2, 3.5, 0.01)
+        candidate_durations = np.arange(0.2, 2.5, 0.01)
         test_mus = [0.0]
 
     if verbose: print(f"    Found {len(peaks_indices)} initial peaks.")
@@ -919,7 +919,7 @@ if __name__ == '__main__':
         
     elif DATA_SOURCE == 'PUSHTReal3d' :
         (states_raw, times_raw, episode_ends_raw, 
-        states_proc, times_proc, episode_ends_proc) = import_data_filtered(PUSHT_REAL_3D, lowpass_cutoff=20.0)
+        states_proc, times_proc, episode_ends_proc) = import_data_filtered(PUSHT_REAL_3D)
         
         EPISODE_IDX = 1
         start_proc = 0 if EPISODE_IDX == 0 else episode_ends_proc[EPISODE_IDX-1]
@@ -1012,7 +1012,7 @@ if __name__ == '__main__':
     
     # 1. Greedy Initialization (Uses velocities of each dimension)
     frefs = [V_ref[:, d] for d in range(D_dim)]
-    ts_init, te_init, mus_init = fit_hybrid_peaks_greedy_unified(t, frefs, method=METHOD, max_bases_total=1000, residual_tol=0.03, verbose=True)
+    ts_init, te_init, mus_init = fit_hybrid_peaks_greedy_unified(t, frefs, method=METHOD, max_bases_total=1000, residual_tol=0.02, verbose=True)
 
     # 2. Global Optimization (Uses the dimension-agnostic function)
     ts_opt, te_opt, mus_opt = refine_bases_unified(t, P, ts_init, te_init, mus_init, method=METHOD, verbose=False)
