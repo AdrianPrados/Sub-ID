@@ -19,7 +19,7 @@ cd /Sub-ID
 conda env create -f environment.yml
 ```
 
-3. Activate the newly created environment (replace `subid_env` with the specific `name` defined at the top of your `environment.yml` file):
+3. Activate the newly created environment:
 ```bash
 conda activate SubID
 ```
