@@ -62,3 +62,27 @@ python SubID.py --dataset SPATULA --method lgnb
 ```bash
 python SubID.py --dataset SPATULA --method minjerk --alpha 0.05
 ```
+## 📊 Comparison with State-of-the-Art Methods
+
+To benchmark our approach, this repository includes `Comparison_SubID.py`, a separate pipeline that evaluates the unified Sub-ID algorithm against three well-established submovement decomposition methods:
+
+*   **[SSSUMO](https://arxiv.org/abs/2507.08028):** A modern deep learning approach utilizing a Time Delay Neural Network (TDNN) architecture to directly predict submovement onset frames and durations from kinematic data without requiring manual iteration.
+*   **[Gowda Method](https://pubmed.ncbi.nlm.nih.gov/26011861/):** A greedy, iterative optimization technique designed to explicitly extract minimum jerk velocity profiles by successively minimizing the residual velocities across the trajectory.
+*   **[Scattershot](https://link.springer.com/article/10.1007/s00422-006-0055-y) ([Jason Implementation](https://github.com/JasonFriedman/submovements)):** A stochastic global optimization strategy built to decompose complex 2D planar trajectories into overlapping bell-shaped velocity profiles, ensuring robust convergence while avoiding local minima.
+
+### Running the Comparison Script
+
+Unlike the main `SubID.py` script, `Comparison_SubID.py` is configured by directly modifying the global variables inside the code rather than using command-line arguments.
+
+1. Open `Comparison_SubID.py` in your preferred code editor.
+2. Scroll to the `if __name__ == '__main__':` block at the bottom of the file.
+3. Modify the core configuration variables to fit your testing needs:
+    *   `METHOD`: Set to `'minjerk'` or `'lgnb'`.
+    *   `ALPHA_STRATEGY`: Set to `'dynamic'` or a specific float value (e.g., `0.05`).
+    *   `DATA_SOURCE`: Choose one of the predefined dataset keys (e.g., `'PUSHTReal3d'`).
+4. Run the script from your terminal:
+    ```bash
+    python Comparison_SubID.py
+    ```
+
+Once completed, the script will output 2D/3D multi-axis trajectory and tangential velocity plots into the `Plots_ALL_COMPARISONS` directory, visually contrasting the reconstruction quality of all algorithms against the ground truth.
