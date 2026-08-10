@@ -19,11 +19,11 @@ from scipy.spatial.transform import Rotation, Slerp
 import SubID as subid
 
 # Import Scattershot
-from submovements.python import movement_decompose_2d
+from Methods.submovements.python import movement_decompose_2d
 # Import SSSUMO
-from sssumoMethod.notebooks import inferencia
+from Methods.sssumoMethod.notebooks import inferencia
 # Import Gowda
-from GowdaMethod import gowda_algorithm  
+from Methods.GowdaMethod import gowda_algorithm  
 
 OUTPUT_DIR = 'Plots/Plots_ALL_COMPARISONS'
 if not os.path.exists(OUTPUT_DIR):
