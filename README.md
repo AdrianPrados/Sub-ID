@@ -4,6 +4,27 @@ This README file provides an overview of the project "Sub-ID: Identifiable Decom
 The GitHub is under construction 👷, and the code will be made available soon 😊.
 
 ---
+## 🛠️ Installation
+
+To ensure all dependencies are correctly installed, we use [Conda](https://docs.conda.io/en/latest/) as our environment manager. An `environment.yml` file is provided in the repository.
+
+1. Clone the repository and navigate to the project directory:
+```bash
+git clone https://github.com/AdrianPrados/Sub-ID
+cd /Sub-ID
+```
+
+2. Create the Conda environment using the provided file:
+```bash
+conda env create -f environment.yml
+```
+
+3. Activate the newly created environment (replace `subid_env` with the specific `name` defined at the top of your `environment.yml` file):
+```bash
+conda activate SubID
+```
+---
+
 
 ## 🚀 Features and How It Works
 

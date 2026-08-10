@@ -195,7 +195,7 @@ def import_data_CSV(csv_path_str: str):
     print(f"Loading CSV: {csv_path}")
     df = pd.read_csv(csv_path)
     
-    target_hz, lowpass_cutoff, butter_order, pad_time = 100.0, 1.0, 4, 0.5 
+    target_hz, lowpass_cutoff, butter_order, pad_time = 100.0, 4.0, 4, 0.5 
     print(f"  > Processing params: Target Hz={target_hz}, Cutoff={lowpass_cutoff}Hz, Pad Time={pad_time}s")
 
     episode_starts = df[df['time'].diff() < 0].index.tolist()
