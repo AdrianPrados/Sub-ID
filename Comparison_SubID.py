@@ -812,7 +812,7 @@ if __name__ == '__main__':
     A_temp = np.hstack([Phi_pos, np.ones((len(t),1))])
     
     if subid.USE_DYNAMIC_ALPHA:
-        alpha_temp = subid.compute_dynamic_ridge_alpha(Phi_vel, kappa_max=100.0)
+        alpha_temp = subid.compute_dynamic_ridge_alpha(A_temp, kappa_max=100.0)
     else:
         alpha_temp = subid.GLOBAL_ALPHA
         
@@ -834,7 +834,7 @@ if __name__ == '__main__':
     A_final = np.hstack([Phi_pos_final, np.ones((len(t),1))])
     
     if subid.USE_DYNAMIC_ALPHA:
-        alpha_final = subid.compute_dynamic_ridge_alpha(Phi_vel_final, kappa_max=100.0)
+        alpha_final = subid.compute_dynamic_ridge_alpha(A_final, kappa_max=100.0)
     else:
         alpha_final = subid.GLOBAL_ALPHA
         
@@ -874,7 +874,7 @@ if __name__ == '__main__':
     # -------------------------------------------------------------------------
     # RUN 2: JASON (Decompose2D)
     # -------------------------------------------------------------------------
-    """ if is_3d:
+    if is_3d:
         print("Jason not implmented in 3D yet. Skipping...")
     else:
         print("\n> Running JASON (Decompose2D)...")
@@ -920,7 +920,7 @@ if __name__ == '__main__':
                 print("Error is:", error)
                 break
         print(f"Best error after scattershot: {error:.4f}")
-        print(f"  -> [JASON] Finished.") """
+        print(f"  -> [JASON] Finished.")
 
     # -------------------------------------------------------------------------
     # RUN 4: GOWDA (Scattershot MinJerk 2015)
