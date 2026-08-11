@@ -525,12 +525,12 @@ if __name__ == '__main__':
     DATA_SOURCE = 'PUSHTReal3d' # 'SYNTHETIC', 'PUSHT', 'PUSHTReal2d', 'SUBJECT', 'LETTERS', 'PUSHTReal3d', 'SPATULA', 'MOVING3D'
     
     PUSHT_SIMULATED = "data/pusht_real/real_pusht_20230105/replay_buffer.zarr"
-    PUSHT_REAL_2D = "data/EPFL_data/adrian_adrian2D_2026-03-13-13-50/data.zarr"
+    PUSHT_REAL_2D = "data/OurPusht_data/User1_2D/data.zarr"
     SUBJECT_STROKE = "data/subject_stroke/subject08day1post"
-    PUSHT_REAL_3D = "data/EPFL_data/adrian_adrian3D_2026-03-13-16-04/data.zarr"
+    PUSHT_REAL_3D = "data/OurPusht_data/User1_3D/data.zarr"
     MOVING_DATA = "data/moving_object/object_moving_tangential_velocity_data.csv"
     LETTERS_PATH = "data/Handwriting/character_D_minjerk.zarr" 
-    SPATULA_PATH = "data/adrian_data/pushing_2026-02-20-16-16/spatula_pose_raw.zarr"
+    SPATULA_PATH = "data/spatula_data/pushing_2026-02-20-16-16/spatula_pose_raw.zarr"
     
     print(f"--- 1. LOADING {DATA_SOURCE} ---")
     
